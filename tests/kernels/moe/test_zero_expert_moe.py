@@ -168,15 +168,17 @@ def test_zero_expert_moe_output_decomposition(zero_expert_moe, num_tokens):
             e_score_correction_bias=layer.routed_experts.e_score_correction_bias,
         ).cuda()
 
-        # Share weights from the zero expert layer.
+        # Share weights from the zero expert layer. Its weights were already
+        # processed (some backends change the layout, e.g. XPU transposes
+        # them), so process the plain layer first so the layouts match.
+        plain_layer._quant_method.process_weights_after_loading(
+            plain_layer.routed_experts
+        )
         plain_layer.routed_experts.w13_weight.data.copy_(
             layer.routed_experts.w13_weight.data
         )
         plain_layer.routed_experts.w2_weight.data.copy_(
             layer.routed_experts.w2_weight.data
-        )
-        plain_layer._quant_method.process_weights_after_loading(
-            plain_layer.routed_experts
         )
 
         # Compute routing via the ZeroExpertRouter. This produces masked
