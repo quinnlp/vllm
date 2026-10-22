@@ -77,6 +77,13 @@ BLOCK_SIZE = 16
 NUM_BLOCKS = 10
 DEVICE_TYPE = current_platform.device_type
 
+if current_platform.is_xpu():
+    from vllm.v1.worker.xpu_model_runner import _torch_cuda_wrapper
+
+    # Route torch.cuda stream/event APIs to torch.xpu, as XPUModelRunner does.
+    with _torch_cuda_wrapper():
+        pass
+
 
 @pytest.fixture(autouse=True)
 def _restore_default_dtype():
