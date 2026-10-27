@@ -2045,6 +2045,11 @@ def test_indexer_quant_cache_roundtrip(
 ):
     """K → indexer_k_quant_and_cache → cp_gather_indexer_k_quant_cache
     → manual dequant → compare against original."""
+    if scale_fmt == "mxfp8" and not current_platform.is_cuda_alike():
+        # The mxfp8 K-cache scale layout is only used on CUDA SM100
+        # (mqa_logits_use_mx_scales), and other platforms' kernels don't
+        # implement it.
+        pytest.skip("mxfp8 indexer K-cache scales require the CUDA kernel")
     HEAD_DIM = 128
     QUANT_BLOCK_SIZE = 128
     # cache_stride = head_dim + (head_dim * 4 / quant_block_size) = 128 + 4 = 132
