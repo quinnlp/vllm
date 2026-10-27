@@ -240,7 +240,11 @@ def test_w8a8_block_fp8_fused_moe(
     # while fused_experts/the reference round SiLU to bf16 first. On large K/N this
     # ~1-ULP gap pushes m_out past the base tol, so validate m_out against an
     # fp32-SiLU reference — keeping the tight base tolerance, no widened override.
-    if current_platform.is_rocm() and K >= 4096 and N >= 1024:
+    if (
+        (current_platform.is_rocm() or current_platform.is_xpu())
+        and K >= 4096
+        and N >= 1024
+    ):
         with set_current_vllm_config(vllm_config):
             ref_out_m = torch_w8a8_block_fp8_moe(
                 a,
