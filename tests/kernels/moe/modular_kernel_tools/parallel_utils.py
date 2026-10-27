@@ -60,7 +60,7 @@ def _set_vllm_config(
             rank=tp_pp_rank,
             distributed_init_method=f"file://{temp_file}",
             local_rank=local_rank,
-            backend="nccl",
+            backend=current_platform.dist_backend,
         )
 
         initialize_model_parallel(
@@ -92,15 +92,19 @@ def _worker_parallel_launch(
     *args: Any,
 ) -> None:
     rank = node_rank * world_local_size + local_rank
-    device = torch.device("cuda", local_rank)
+    device = torch.device(current_platform.device_type, local_rank)
     torch.accelerator.set_device_index(device)
     torch.set_default_device(device)
     torch.distributed.init_process_group(
-        backend="cpu:gloo,cuda:nccl",
+        backend=f"cpu:gloo,{current_platform.device_type}:"
+        f"{current_platform.dist_backend}",
         init_method=init_method,
         rank=rank,
         world_size=world_size,
-        device_id=device,
+        # Binding a device makes torch look up a backend for its device type
+        # in every new group, including the gloo-only groups vLLM creates, and
+        # gloo has no backend for non-CUDA devices such as XPU.
+        device_id=device if current_platform.is_cuda_alike() else None,
     )
     barrier = torch.tensor([rank], device=device)
     torch.distributed.all_reduce(barrier)
