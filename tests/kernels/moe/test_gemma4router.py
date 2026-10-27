@@ -14,6 +14,16 @@ def sort_by_id(w, ids):
     return w.gather(1, order), ids.gather(1, order)
 
 
+def routing_weights_for_ids(gating, topk_ids, per_expert_scale):
+    """Weights gemma4_routing_function_torch assigns to a given expert choice."""
+    topk_ids = topk_ids.long()
+    probs = torch.nn.functional.softmax(gating, dim=-1).gather(1, topk_ids)
+    renorm = probs.sum(dim=-1, keepdim=True)
+    renorm = torch.where(renorm > 0.0, renorm, 1.0)
+    weights = probs / renorm * per_expert_scale[topk_ids].to(probs.dtype)
+    return weights.to(torch.float32)
+
+
 # Gemma4 MoE Model has context length of 250K
 # the minus 1 is to ensure that edge cases are tested
 @pytest.mark.parametrize("num_tokens", [1, 2, 2048, 250000])
@@ -34,20 +44,31 @@ def test_gemma4_routing_kernel_triton(
     ref_w, ref_ids = gemma4_routing_function_torch(gating, topk, scales)
     tri_w, tri_ids = gemma4_fused_routing_kernel_triton(gating, topk, scales)
 
-    # Sort by expert id — to remove tie-breaking differences
+    # Sort by expert id — to remove tie-breaking differences in the order
     ref_ws, ref_is = sort_by_id(ref_w, ref_ids)
     tri_ws, tri_is = sort_by_id(tri_w, tri_ids)
 
-    ids_match = (ref_is == tri_is).all().item()
-    weights_match = torch.allclose(ref_ws, tri_ws, atol=1e-2, rtol=1e-2)
-    all_match = ids_match and weights_match
-    max_err = (ref_ws - tri_ws).abs().max().item()
+    # Experts with equal gating values at the top-k boundary are
+    # interchangeable, and the kernel and torch.topk may pick different ones.
+    # Rows are therefore valid if the kernel picked distinct experts whose
+    # gating values are the top-k values; weights are compared against the
+    # reference weights for the experts the kernel picked.
+    ids_distinct = (tri_is[:, 1:] != tri_is[:, :-1]).all().item()
+    ref_values = gating.gather(1, ref_is.long()).sort(dim=-1).values
+    tri_values = gating.gather(1, tri_is.long()).sort(dim=-1).values
+    ids_valid = ids_distinct and torch.equal(ref_values, tri_values)
+    expected_ws = routing_weights_for_ids(gating, tri_is, scales)
+    weights_match = torch.allclose(expected_ws, tri_ws, atol=1e-2, rtol=1e-2)
+    all_match = ids_valid and weights_match
+    max_err = (expected_ws - tri_ws).abs().max().item()
+    num_tie_rows = (ref_is != tri_is).any(dim=-1).sum().item()
     print(
         f"T={num_tokens:5d} E={num_experts:4d} K={topk} "
-        f"{str(dtype).split('.')[-1]:7s} ids={ids_match} max_Δweight={max_err:.2e}"
+        f"{str(dtype).split('.')[-1]:7s} ids={ids_valid} "
+        f"rows_with_tie_swaps={num_tie_rows} max_Δweight={max_err:.2e}"
     )
     if not all_match:
-        bad = (ref_is != tri_is).any(dim=-1).nonzero(as_tuple=True)[0]
+        bad = (ref_values != tri_values).any(dim=-1).nonzero(as_tuple=True)[0]
         if len(bad):
             r = bad[0].item()
             print(
