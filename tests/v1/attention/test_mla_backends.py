@@ -52,7 +52,7 @@ from vllm.v1.attention.backends.mla.prefill.selector import (
 from vllm.v1.attention.backends.mla.prefill.trtllm_ragged import (
     is_cute_dsl_mla_prefill_supported,
 )
-from vllm.v1.attention.backends.registry import AttentionBackendEnum
+from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.attention.ops.flashmla import is_flashmla_dense_supported
 from vllm.v1.kv_cache_interface import (
     KVQuantMode,
@@ -297,6 +297,17 @@ if not torch.cuda.is_available() or torch.cuda.get_device_properties(0).major < 
 # Remove FLASH_ATTN_MLA from the list if not supported
 if not flash_attn_supports_mla():
     BACKENDS_TO_TEST.remove(AttentionBackendEnum.FLASH_ATTN_MLA)
+
+# On XPU, FLASH_ATTN_MLA is served by XPUFlashAttnMLABackend (see
+# XPUPlatform.get_attn_backend_cls), so test that class, not the CUDA one.
+if (
+    current_platform.is_xpu()
+    and AttentionBackendEnum.FLASH_ATTN_MLA in BACKENDS_TO_TEST
+):
+    register_backend(
+        AttentionBackendEnum.FLASH_ATTN_MLA,
+        "vllm.v1.attention.backends.mla.flashattn_mla.XPUFlashAttnMLABackend",
+    )
 
 # Remove FLASHMLA from the list if not supported
 if not is_flashmla_dense_supported()[0]:
